@@ -5,7 +5,7 @@ const http = require('http');
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 const TOKEN = process.env.TOKEN;
 const SHEET_ID = process.env.SHEET_ID;
-const SHEET_NAME = 'tg-bot-rio';
+const SHEET_NAME = 'Opendeck';
 const CREDENTIALS = JSON.parse(process.env.GOOGLE_CREDENTIALS);
 const CHECK_INTERVAL_MS = 2 * 60 * 1000; // 2 минуты
 // ──────────────────────────────────────────────────────────────────────────────
@@ -67,7 +67,7 @@ function getDuration(since) {
 function buildMessage(entry, since) {
 	const duration = since ? getDuration(since) : '0 mins';
 	return (
-		`🚛 ${entry.driver} *_is ready for ${duration}_*\n` +
+		`🚛 ${entry.driver} is ready for ${duration}\n` +
 		`🏢 Company: ${entry.company}\n` +
 		`👤 Dispatcher: ${entry.dispatcher}\n` +
 		`📞 Phone: ${entry.phone}\n` +
@@ -125,7 +125,7 @@ async function checkAndNotify() {
 
 		for (const chatId of subscribers) {
 			try {
-				await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+				await bot.sendMessage(chatId, message);
 			} catch (err) {
 				console.error(`❌ Send error ${chatId}:`, err.message);
 				if (err.response?.body?.error_code === 403) subscribers.delete(chatId);
@@ -173,9 +173,7 @@ bot.onText(/\/check/, async (msg) => {
 		}
 		for (const e of entries) {
 			const since = readySince.get(e.driver) || new Date();
-			await bot.sendMessage(chatId, buildMessage(e, since), {
-				parse_mode: 'Markdown',
-			});
+			await bot.sendMessage(chatId, buildMessage(e, since));
 		}
 	} catch (err) {
 		await bot.sendMessage(chatId, `⚠️ Error: ${err.message}`);
