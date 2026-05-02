@@ -5,7 +5,7 @@ const http = require('http');
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 const TOKEN = process.env.TOKEN;
 const SHEET_ID = process.env.SHEET_ID;
-const SHEET_NAME = 'tg-bot-rio';
+const SHEET_NAME = 'Opendeck';
 const CREDENTIALS = JSON.parse(process.env.GOOGLE_CREDENTIALS);
 const CHECK_INTERVAL_MS = 5 * 60 * 1000; // 2 минуты
 // ──────────────────────────────────────────────────────────────────────────────
