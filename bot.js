@@ -5,7 +5,7 @@ const http = require('http');
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 const TOKEN = process.env.TOKEN; // Telegram bot token
 const SHEET_ID = process.env.SHEET_ID; // Google Sheets ID из ссылки
-const SHEET_NAME = 'Opendesk'; // Имя листа
+const SHEET_NAME = 'Opendeck'; // Имя листа
 const CREDENTIALS = JSON.parse(process.env.GOOGLE_CREDENTIALS); // JSON сервисного аккаунта
 const CHECK_INTERVAL_MS = 2 * 60 * 1000; // 2 минуты
 // ──────────────────────────────────────────────────────────────────────────────
