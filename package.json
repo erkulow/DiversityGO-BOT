@@ -1,0 +1,12 @@
+{
+  "name": "truck-ready-bot",
+  "version": "1.0.0",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "node-telegram-bot-api": "^0.65.1",
+    "googleapis": "^140.0.0"
+  }
+}
