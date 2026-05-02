@@ -5,7 +5,7 @@ const http = require('http');
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 const TOKEN = process.env.TOKEN;
 const SHEET_ID = process.env.SHEET_ID;
-const SHEET_NAME = 'Opendeck';
+const SHEET_NAME = 'tg-bot-rio';
 const CREDENTIALS = JSON.parse(process.env.GOOGLE_CREDENTIALS);
 const CHECK_INTERVAL_MS = 2 * 60 * 1000; // 2 минуты
 // ──────────────────────────────────────────────────────────────────────────────
@@ -18,15 +18,12 @@ const readySince = new Map();
 
 // ─── GOOGLE SHEETS ────────────────────────────────────────────────────────────
 
-function getAuth() {
-	return new google.auth.GoogleAuth({
+async function fetchSheetData() {
+	const auth = new google.auth.GoogleAuth({
 		credentials: CREDENTIALS,
 		scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
 	});
-}
-
-async function fetchSheetData() {
-	const sheets = google.sheets({ version: 'v4', auth: getAuth() });
+	const sheets = google.sheets({ version: 'v4', auth });
 	const res = await sheets.spreadsheets.values.get({
 		spreadsheetId: SHEET_ID,
 		range: SHEET_NAME,
@@ -59,10 +56,6 @@ async function findReadyDrivers() {
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 
-/**
- * Считает сколько минут/часов прошло с since
- * "5 mins" | "1 hr 30 mins" | "2 hrs"
- */
 function getDuration(since) {
 	const diff = Math.floor((Date.now() - since.getTime()) / 60000);
 	if (diff < 60) return `${diff} mins`;
@@ -71,18 +64,10 @@ function getDuration(since) {
 	return mins > 0 ? `${hrs} hr ${mins} mins` : `${hrs} hr`;
 }
 
-/**
- * Форматирует сообщение:
- * 🚛 Ahmet # 315216 is ready for 30 mins
- * 🏢 Company: DTL
- * 👤 Dispatcher: Alan
- * 📞 Phone: 813-416-0293
- * 📅 Date: 27 апр.
- */
 function buildMessage(entry, since) {
 	const duration = since ? getDuration(since) : '0 mins';
 	return (
-		`🚛 ${entry.driver} _*is ready for ${duration}*_\n` +
+		`🚛 ${entry.driver} *_is ready for ${duration}_*\n` +
 		`🏢 Company: ${entry.company}\n` +
 		`👤 Dispatcher: ${entry.dispatcher}\n` +
 		`📞 Phone: ${entry.phone}\n` +
@@ -121,7 +106,7 @@ async function checkAndNotify() {
 		}
 	}
 
-	// Только новые
+	// Только новые водители в READY
 	const newReady = current.filter((e) => !readySince.has(e.driver));
 	for (const e of newReady) {
 		readySince.set(e.driver, now);
@@ -133,14 +118,14 @@ async function checkAndNotify() {
 		return;
 	}
 
-	// Отправляем только новых
+	// Отправляем уведомления
 	for (const entry of newReady) {
 		const since = readySince.get(entry.driver);
 		const message = buildMessage(entry, since);
 
 		for (const chatId of subscribers) {
 			try {
-				await bot.sendMessage(chatId, message, { parse_mode: 'MarkdownV2' });
+				await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
 			} catch (err) {
 				console.error(`❌ Send error ${chatId}:`, err.message);
 				if (err.response?.body?.error_code === 403) subscribers.delete(chatId);
@@ -159,13 +144,13 @@ bot.onText(/\/start/, (msg) => {
 	console.log(`➕ Subscribed: ${msg.from.first_name} (${chatId})`);
 	bot.sendMessage(
 		chatId,
-		`👋 Hi *${msg.from.first_name || 'friend'}*\\!\n\n` +
-			`✅ Subscribed to *READY* alerts\\.\n` +
-			`Checks every *2 minutes*\\.\n\n` +
-			`/check \\— check right now\n` +
-			`/ready \\— who is READY now\n` +
-			`/stop \\— unsubscribe`,
-		{ parse_mode: 'MarkdownV2' },
+		`👋 Hi *${msg.from.first_name || 'friend'}*!\n\n` +
+			`✅ Subscribed to *READY* alerts.\n` +
+			`Checks every *2 minutes*.\n\n` +
+			`/check — check right now\n` +
+			`/ready — who is READY now\n` +
+			`/stop — unsubscribe`,
+		{ parse_mode: 'Markdown' },
 	);
 });
 
@@ -173,28 +158,23 @@ bot.onText(/\/stop/, (msg) => {
 	subscribers.delete(msg.chat.id);
 	bot.sendMessage(
 		msg.chat.id,
-		'🔕 Unsubscribed\\. Send /start to subscribe again\\.',
-		{ parse_mode: 'MarkdownV2' },
+		'🔕 Unsubscribed. Send /start to subscribe again.',
 	);
 });
 
 bot.onText(/\/check/, async (msg) => {
 	const chatId = msg.chat.id;
-	await bot.sendMessage(chatId, '🔍 Checking\\.\\.\\.', {
-		parse_mode: 'MarkdownV2',
-	});
+	await bot.sendMessage(chatId, '🔍 Checking...');
 	try {
 		const entries = await findReadyDrivers();
 		if (entries.length === 0) {
-			await bot.sendMessage(chatId, '✅ No READY drivers right now\\.', {
-				parse_mode: 'MarkdownV2',
-			});
+			await bot.sendMessage(chatId, '✅ No READY drivers right now.');
 			return;
 		}
 		for (const e of entries) {
 			const since = readySince.get(e.driver) || new Date();
 			await bot.sendMessage(chatId, buildMessage(e, since), {
-				parse_mode: 'MarkdownV2',
+				parse_mode: 'Markdown',
 			});
 		}
 	} catch (err) {
@@ -205,16 +185,14 @@ bot.onText(/\/check/, async (msg) => {
 bot.onText(/\/ready/, (msg) => {
 	const chatId = msg.chat.id;
 	if (readySince.size === 0) {
-		bot.sendMessage(chatId, '✅ No drivers currently READY\\.', {
-			parse_mode: 'MarkdownV2',
-		});
+		bot.sendMessage(chatId, '✅ No drivers currently READY.');
 		return;
 	}
-	let text = `🚛 *Currently READY \\(${readySince.size}\\):*\n\n`;
+	let text = `🚛 *Currently READY (${readySince.size}):*\n\n`;
 	for (const [driver, since] of readySince.entries()) {
-		text += `• *${driver}* \\— ${getDuration(since)}\n`;
+		text += `• *${driver}* — ${getDuration(since)}\n`;
 	}
-	bot.sendMessage(chatId, text, { parse_mode: 'MarkdownV2' });
+	bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
 });
 
 // ─── HTTP (чтобы Render не засыпал) ──────────────────────────────────────────
