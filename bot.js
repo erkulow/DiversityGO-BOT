@@ -40,8 +40,11 @@ async function findReadyDrivers() {
 		if (ri === 0) return;
 		row.forEach((cell, ci) => {
 			if (String(cell).trim().toLowerCase() === 'ready') {
+				const driver = row[2] ? row[2].trim() : '';
+				// Пропускаем строки без водителя (копи-строки)
+				if (!driver || driver === '—') return;
 				result.push({
-					driver: row[2] || '—',
+					driver,
 					company: row[0] || '—',
 					dispatcher: row[1] || '—',
 					phone: row[3] || '—',
