@@ -1,5 +1,5 @@
-const TelegramBot = require('node-telegram-bot-api');
 const { google } = require('googleapis');
+const axios = require('axios');
 const http = require('http');
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
@@ -7,14 +7,105 @@ const TOKEN = process.env.TOKEN;
 const SHEET_ID = process.env.SHEET_ID;
 const SHEET_NAME = 'Opendeck';
 const CREDENTIALS = JSON.parse(process.env.GOOGLE_CREDENTIALS);
-const CHECK_INTERVAL_MS = 5 * 60 * 1000; // 2 минуты
+const CHECK_INTERVAL_MS = 2 * 60 * 1000; // 2 минуты
+const TG = `https://api.telegram.org/bot${TOKEN}`;
 // ──────────────────────────────────────────────────────────────────────────────
 
-const bot = new TelegramBot(TOKEN, { polling: true });
 const subscribers = new Set();
-
-// driver name -> Date (когда впервые стал READY)
 const readySince = new Map();
+let offset = 0;
+
+// ─── TELEGRAM ─────────────────────────────────────────────────────────────────
+
+async function tgRequest(method, data) {
+	try {
+		const res = await axios.post(`${TG}/${method}`, data, { timeout: 10000 });
+		return res.data;
+	} catch (err) {
+		console.error(
+			`❌ TG ${method} error:`,
+			err.response?.data?.description || err.message,
+		);
+		return null;
+	}
+}
+
+async function sendMessage(chatId, text) {
+	return tgRequest('sendMessage', { chat_id: chatId, text });
+}
+
+async function getUpdates() {
+	const res = await tgRequest('getUpdates', {
+		offset,
+		timeout: 30,
+		allowed_updates: ['message'],
+	});
+	return res?.result || [];
+}
+
+// ─── POLLING LOOP ─────────────────────────────────────────────────────────────
+
+async function poll() {
+	const updates = await getUpdates();
+
+	for (const update of updates) {
+		offset = update.update_id + 1;
+		const msg = update.message;
+		if (!msg || !msg.text) continue;
+
+		const chatId = msg.chat.id;
+		const text = msg.text.trim();
+		const name = msg.from?.first_name || 'friend';
+
+		if (text === '/start') {
+			subscribers.add(chatId);
+			console.log(`➕ Subscribed: ${name} (${chatId})`);
+			await sendMessage(
+				chatId,
+				`👋 Hi ${name}!\n\n` +
+					`✅ Subscribed to READY alerts.\n` +
+					`Bot sends updates every 2 minutes.\n\n` +
+					`/check — check right now\n` +
+					`/ready — who is READY now\n` +
+					`/stop — unsubscribe`,
+			);
+		} else if (text === '/stop') {
+			subscribers.delete(chatId);
+			await sendMessage(
+				chatId,
+				'🔕 Unsubscribed. Send /start to subscribe again.',
+			);
+		} else if (text === '/check') {
+			await sendMessage(chatId, '🔍 Checking...');
+			try {
+				const entries = await findReadyDrivers();
+				if (entries.length === 0) {
+					await sendMessage(chatId, '✅ No READY drivers right now.');
+				} else {
+					for (const e of entries) {
+						const since = readySince.get(e.driver) || new Date();
+						await sendMessage(chatId, buildMessage(e, since));
+					}
+				}
+			} catch (err) {
+				await sendMessage(chatId, `⚠️ Error: ${err.message}`);
+			}
+		} else if (text === '/ready') {
+			if (readySince.size === 0) {
+				await sendMessage(chatId, '✅ No drivers currently READY.');
+			} else {
+				let t = `🚛 Currently READY (${readySince.size}):\n\n`;
+				for (const [driver, since] of readySince.entries()) {
+					t += `• ${driver} — ${getDuration(since)}\n`;
+				}
+				await sendMessage(chatId, t);
+			}
+		}
+	}
+
+	// следующий poll сразу
+	setImmediate(poll);
+}
 
 // ─── GOOGLE SHEETS ────────────────────────────────────────────────────────────
 
@@ -41,7 +132,6 @@ async function findReadyDrivers() {
 		row.forEach((cell, ci) => {
 			if (String(cell).trim().toLowerCase() === 'ready') {
 				const driver = row[2] ? row[2].trim() : '';
-				// Пропускаем строки без водителя (копи-строки)
 				if (!driver || driver === '—') return;
 				result.push({
 					driver,
@@ -109,92 +199,33 @@ async function checkAndNotify() {
 		}
 	}
 
-	// Только новые водители в READY
-	const newReady = current.filter((e) => !readySince.has(e.driver));
-	for (const e of newReady) {
-		readySince.set(e.driver, now);
-		console.log(`➕ New READY: ${e.driver}`);
+	// Запоминаем новых
+	for (const e of current) {
+		if (!readySince.has(e.driver)) {
+			readySince.set(e.driver, now);
+			console.log(`➕ New READY: ${e.driver}`);
+		}
 	}
 
-	if (newReady.length === 0) {
-		console.log('✅ No new READY drivers.');
+	// Отправляем ВСЕХ текущих READY каждые 2 минуты
+	if (current.length === 0) {
+		console.log('✅ No READY drivers.');
 		return;
 	}
 
-	// Отправляем уведомления
-	for (const entry of newReady) {
+	for (const entry of current) {
 		const since = readySince.get(entry.driver);
 		const message = buildMessage(entry, since);
 
 		for (const chatId of subscribers) {
-			try {
-				await bot.sendMessage(chatId, message);
-			} catch (err) {
-				console.error(`❌ Send error ${chatId}:`, err.message);
-				if (err.response?.body?.error_code === 403) subscribers.delete(chatId);
-			}
+			await sendMessage(chatId, message);
 		}
 	}
 
-	console.log(`✅ Notified: ${newReady.length} driver(s).`);
+	console.log(
+		`✅ Sent ${current.length} READY driver(s) to ${subscribers.size} subscriber(s).`,
+	);
 }
-
-// ─── КОМАНДЫ ──────────────────────────────────────────────────────────────────
-
-bot.onText(/\/start/, (msg) => {
-	const chatId = msg.chat.id;
-	subscribers.add(chatId);
-	console.log(`➕ Subscribed: ${msg.from.first_name} (${chatId})`);
-	bot.sendMessage(
-		chatId,
-		`👋 Hi *${msg.from.first_name || 'friend'}*!\n\n` +
-			`✅ Subscribed to *READY* alerts.\n` +
-			`Checks every *2 minutes*.\n\n` +
-			`/check — check right now\n` +
-			`/ready — who is READY now\n` +
-			`/stop — unsubscribe`,
-		{ parse_mode: 'Markdown' },
-	);
-});
-
-bot.onText(/\/stop/, (msg) => {
-	subscribers.delete(msg.chat.id);
-	bot.sendMessage(
-		msg.chat.id,
-		'🔕 Unsubscribed. Send /start to subscribe again.',
-	);
-});
-
-bot.onText(/\/check/, async (msg) => {
-	const chatId = msg.chat.id;
-	await bot.sendMessage(chatId, '🔍 Checking...');
-	try {
-		const entries = await findReadyDrivers();
-		if (entries.length === 0) {
-			await bot.sendMessage(chatId, '✅ No READY drivers right now.');
-			return;
-		}
-		for (const e of entries) {
-			const since = readySince.get(e.driver) || new Date();
-			await bot.sendMessage(chatId, buildMessage(e, since));
-		}
-	} catch (err) {
-		await bot.sendMessage(chatId, `⚠️ Error: ${err.message}`);
-	}
-});
-
-bot.onText(/\/ready/, (msg) => {
-	const chatId = msg.chat.id;
-	if (readySince.size === 0) {
-		bot.sendMessage(chatId, '✅ No drivers currently READY.');
-		return;
-	}
-	let text = `🚛 *Currently READY (${readySince.size}):*\n\n`;
-	for (const [driver, since] of readySince.entries()) {
-		text += `• *${driver}* — ${getDuration(since)}\n`;
-	}
-	bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
-});
 
 // ─── HTTP (чтобы Render не засыпал) ──────────────────────────────────────────
 http.createServer((req, res) => res.end('OK')).listen(process.env.PORT || 3000);
@@ -202,6 +233,11 @@ http.createServer((req, res) => res.end('OK')).listen(process.env.PORT || 3000);
 // ─── ЗАПУСК ───────────────────────────────────────────────────────────────────
 console.log('🚀 Bot started');
 console.log(`📋 Sheet: ${SHEET_NAME} | ⏱ Every 2 min\n`);
+
+// Удаляем webhook если был
+axios.post(`${TG}/deleteWebhook`).then(() => {
+	poll(); // запускаем polling
+});
 
 checkAndNotify();
 setInterval(checkAndNotify, CHECK_INTERVAL_MS);
